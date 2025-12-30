@@ -1,0 +1,12 @@
+# Ignore the virtual environment
+adas_env/
+__pycache__/
+*.pyc
+
+# Ignore large weight files (too big for GitHub free tier)
+YOLOP/weights/
+*.pth
+*.onnx
+
+# Ignore output videos/images
+YOLOP/inference/output/
