@@ -125,6 +125,40 @@ def detect(cfg,opt):
         ll_seg_mask = torch.nn.functional.interpolate(ll_predict, scale_factor=int(1/ratio), mode='bilinear')
         _, ll_seg_mask = torch.max(ll_seg_mask, 1)
         ll_seg_mask = ll_seg_mask.int().squeeze().cpu().numpy()
+
+        # --- NEW: Lane Departure Warning Logic ---
+        
+        # 1. Define the "Center" of the image
+        img_center_x = width // 2
+        
+        # 2. Find the "Center of Mass" of the Drivable Area (Green Mask)
+        # We only look at the bottom half of the image (closer to car) for better accuracy
+        da_seg_mask_bottom = da_seg_mask[height//2:, :]
+        true_pixels = np.argwhere(da_seg_mask_bottom == 1)
+        
+        status_text = "LANE STATUS: OK"
+        status_color = (0, 255, 0) # Green
+
+        if len(true_pixels) > 0:
+            # Calculate average X coordinate of the green pixels
+            lane_center_x = np.mean(true_pixels[:, 1])
+            
+            # 3. Calculate Deviation (How far off are we?)
+            deviation = lane_center_x - img_center_x
+            
+            # 4. Threshold: If deviation > 50 pixels, trigger warning
+            if abs(deviation) > 50: 
+                status_color = (0, 0, 255) # Red
+                if deviation > 0:
+                    status_text = "WARNING: DRIFTING RIGHT! <--"
+                else:
+                    status_text = "WARNING: DRIFTING LEFT! -->"
+
+        # 5. Draw the Dashboard UI (Status Bar) at the top
+        cv2.putText(img_det, status_text, (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 
+                    1.2, status_color, 3, cv2.LINE_AA)
+        
+        # --- END NEW LOGIC ---
         # Lane line post-processing
         #ll_seg_mask = morphological_process(ll_seg_mask, kernel_size=7, func_type=cv2.MORPH_OPEN)
         #ll_seg_mask = connect_lane(ll_seg_mask)
@@ -132,10 +166,30 @@ def detect(cfg,opt):
         img_det = show_seg_result(img_det, (da_seg_mask, ll_seg_mask), _, _, is_demo=True)
 
         if len(det):
-            det[:,:4] = scale_coords(img.shape[2:],det[:,:4],img_det.shape).round()
-            for *xyxy,conf,cls in reversed(det):
-                label_det_pred = f'{names[int(cls)]} {conf:.2f}'
-                plot_one_box(xyxy, img_det , label=label_det_pred, color=colors[int(cls)], line_thickness=2)
+                det[:,:4] = scale_coords(img.shape[2:],det[:,:4],img_det.shape).round()
+                for *xyxy,conf,cls in reversed(det):
+                    # --- NEW LOGIC START ---
+                    
+                    # 1. Calculate Box Width (x2 - x1)
+                    x1, y1, x2, y2 = float(xyxy[0]), float(xyxy[1]), float(xyxy[2]), float(xyxy[3])
+                    box_width = x2 - x1
+                    
+                    # 2. Distance Math: (Real_Width_1.8m * Focal_Length_600) / Pixel_Width
+                    distance = (1.8 * 600) / box_width  
+                    
+                    # 3. Collision Warning Logic
+                    if distance < 10:
+                        # RED box and warning label
+                        color = (0, 0, 255) 
+                        label_det_pred = f'BRAKE! {distance:.1f}m'
+                    else:
+                        # Normal color
+                        color = colors[int(cls)]
+                        label_det_pred = f'{names[int(cls)]} {distance:.1f}m'
+
+                    # 4. Draw the box
+                    plot_one_box(xyxy, img_det , label=label_det_pred, color=color, line_thickness=2)
+                    # --- NEW LOGIC END ---
         
         if dataset.mode == 'images':
             cv2.imwrite(save_path,img_det)
